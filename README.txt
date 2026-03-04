@@ -42,3 +42,9 @@ browser to support JavaScript.
 
 Questions? please post to the UDT project forum:
 https://sourceforge.net/projects/udt/forums
+
+Congestion control selection:
+By default UDT keeps using the original built-in congestion control (CUDTCC).
+Set environment variable UDT_CC_ALGO=bbr before creating UDT sockets to switch to
+the new BBR-style controller (CBBRCC).
+

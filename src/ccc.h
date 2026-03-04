@@ -275,4 +275,44 @@ private:
    int m_iDecCount;			// number of decreases in a congestion epoch
 };
 
+class CBBRCC: public CCC
+{
+public:
+   CBBRCC();
+
+public:
+   virtual void init();
+   virtual void onACK(int32_t);
+   virtual void onLoss(const int32_t*, int);
+   virtual void onTimeout();
+
+private:
+   enum BBRMode
+   {
+      BBR_STARTUP = 0,
+      BBR_DRAIN = 1,
+      BBR_PROBE_BW = 2,
+      BBR_PROBE_RTT = 3
+   };
+
+private:
+   void enterMode(BBRMode mode);
+   void updateModel();
+
+private:
+   BBRMode m_BBRMode;
+   uint64_t m_LastUpdateTime;
+   uint64_t m_LastRoundStart;
+   uint64_t m_MinRTTStamp;
+   uint64_t m_ProbeRTTDoneStamp;
+   double m_dBtlBw;
+   int m_iMinRTT;
+   int m_iFullBwCount;
+   int m_iCycleIndex;
+   bool m_bFilledPipe;
+   bool m_bProbeRTTDone;
+};
+
+CCCVirtualFactory* createDefaultCCFactory();
+
 #endif

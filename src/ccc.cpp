@@ -42,6 +42,7 @@ written by
 #include "core.h"
 #include "ccc.h"
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 CCC::CCC():
@@ -311,4 +312,193 @@ void CUDTCC::onTimeout()
       m_iLastDecSeq = m_iLastAck;
       */
    }
+}
+
+//
+CBBRCC::CBBRCC():
+m_BBRMode(BBR_STARTUP),
+m_LastUpdateTime(),
+m_LastRoundStart(),
+m_MinRTTStamp(),
+m_ProbeRTTDoneStamp(),
+m_dBtlBw(),
+m_iMinRTT(),
+m_iFullBwCount(),
+m_iCycleIndex(),
+m_bFilledPipe(),
+m_bProbeRTTDone()
+{
+}
+
+void CBBRCC::init()
+{
+   m_BBRMode = BBR_STARTUP;
+   m_LastUpdateTime = CTimer::getTime();
+   m_LastRoundStart = m_LastUpdateTime;
+   m_MinRTTStamp = m_LastUpdateTime;
+   m_ProbeRTTDoneStamp = 0;
+   m_dBtlBw = 0;
+   m_iMinRTT = 0;
+   m_iFullBwCount = 0;
+   m_iCycleIndex = 0;
+   m_bFilledPipe = false;
+   m_bProbeRTTDone = false;
+
+   setACKTimer(m_iSYNInterval);
+   m_dCWndSize = 16;
+   m_dPktSndPeriod = 1;
+}
+
+void CBBRCC::enterMode(BBRMode mode)
+{
+   m_BBRMode = mode;
+   if (BBR_PROBE_BW == mode)
+      m_iCycleIndex = 0;
+}
+
+void CBBRCC::updateModel()
+{
+   if (m_iBandwidth > 0)
+   {
+      if (m_iBandwidth > m_dBtlBw)
+      {
+         m_dBtlBw = m_iBandwidth;
+         if (BBR_STARTUP == m_BBRMode)
+         {
+            m_iFullBwCount = 0;
+            m_bFilledPipe = false;
+         }
+      }
+      else if (BBR_STARTUP == m_BBRMode)
+      {
+         ++ m_iFullBwCount;
+         if (m_iFullBwCount >= 3)
+            m_bFilledPipe = true;
+      }
+   }
+
+   if ((m_iRTT > 0) && ((0 == m_iMinRTT) || (m_iRTT < m_iMinRTT)))
+   {
+      m_iMinRTT = m_iRTT;
+      m_MinRTTStamp = CTimer::getTime();
+   }
+}
+
+void CBBRCC::onACK(int32_t)
+{
+   uint64_t now = CTimer::getTime();
+   if (now - m_LastUpdateTime < (uint64_t)m_iSYNInterval)
+      return;
+
+   m_LastUpdateTime = now;
+   updateModel();
+
+   if ((0 != m_iMinRTT) && (now - m_MinRTTStamp > 10000000ULL) && (BBR_PROBE_RTT != m_BBRMode))
+   {
+      enterMode(BBR_PROBE_RTT);
+      m_bProbeRTTDone = false;
+      m_ProbeRTTDoneStamp = 0;
+   }
+
+   if ((BBR_STARTUP == m_BBRMode) && m_bFilledPipe)
+      enterMode(BBR_DRAIN);
+
+   if (BBR_DRAIN == m_BBRMode)
+   {
+      if (m_dCWndSize <= 64)
+         enterMode(BBR_PROBE_BW);
+      else
+         m_dCWndSize -= 8;
+   }
+
+   double pacing_gain = 1.0;
+   double cwnd_gain = 2.0;
+
+   if (BBR_STARTUP == m_BBRMode)
+      pacing_gain = 2.0;
+   else if (BBR_DRAIN == m_BBRMode)
+      pacing_gain = 0.75;
+   else if (BBR_PROBE_BW == m_BBRMode)
+   {
+      static const double g_cycle[] = {1.25, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+      pacing_gain = g_cycle[m_iCycleIndex];
+      if (now - m_LastRoundStart >= 1000000ULL)
+      {
+         m_iCycleIndex = (m_iCycleIndex + 1) % 8;
+         m_LastRoundStart = now;
+      }
+   }
+   else if (BBR_PROBE_RTT == m_BBRMode)
+   {
+      pacing_gain = 0.6;
+      cwnd_gain = 1.0;
+      if (!m_bProbeRTTDone)
+      {
+         if (0 == m_ProbeRTTDoneStamp)
+            m_ProbeRTTDoneStamp = now + 200000ULL;
+         else if (now >= m_ProbeRTTDoneStamp)
+            m_bProbeRTTDone = true;
+      }
+      else
+      {
+         m_MinRTTStamp = now;
+         enterMode(BBR_PROBE_BW);
+      }
+   }
+
+   if (m_dBtlBw > 0)
+      m_dPktSndPeriod = 1000000.0 / (m_dBtlBw * pacing_gain);
+   else if (m_iRcvRate > 0)
+      m_dPktSndPeriod = 1000000.0 / (m_iRcvRate * pacing_gain);
+
+   if (m_dPktSndPeriod < 1.0)
+      m_dPktSndPeriod = 1.0;
+
+   double bdp = 16.0;
+   if ((m_dBtlBw > 0) && (m_iMinRTT > 0))
+      bdp = (m_dBtlBw * m_iMinRTT) / 1000000.0;
+   else if ((m_iBandwidth > 0) && (m_iRTT > 0))
+      bdp = (m_iBandwidth * m_iRTT) / 1000000.0;
+
+   m_dCWndSize = bdp * cwnd_gain;
+   if (m_dCWndSize < 16.0)
+      m_dCWndSize = 16.0;
+   if (m_dCWndSize > m_dMaxCWndSize)
+      m_dCWndSize = m_dMaxCWndSize;
+}
+
+void CBBRCC::onLoss(const int32_t*, int)
+{
+   if (m_dPktSndPeriod < 1000000.0)
+      m_dPktSndPeriod *= 1.1;
+
+   if (m_dCWndSize > 16.0)
+      m_dCWndSize *= 0.9;
+
+   if (m_dCWndSize < 16.0)
+      m_dCWndSize = 16.0;
+}
+
+void CBBRCC::onTimeout()
+{
+   if (m_dPktSndPeriod < 1000000.0)
+      m_dPktSndPeriod *= 1.25;
+   if (m_dCWndSize > 16.0)
+      m_dCWndSize *= 0.8;
+   if (m_dCWndSize < 16.0)
+      m_dCWndSize = 16.0;
+
+   enterMode(BBR_PROBE_BW);
+}
+
+CCCVirtualFactory* createDefaultCCFactory()
+{
+   const char* cc_algo = getenv("UDT_CC_ALGO");
+   if (NULL != cc_algo)
+   {
+      if ((0 == strcmp(cc_algo, "bbr")) || (0 == strcmp(cc_algo, "BBR")))
+         return new CCCFactory<CBBRCC>;
+   }
+
+   return new CCCFactory<CUDTCC>;
 }

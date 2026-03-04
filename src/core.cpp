@@ -125,7 +125,7 @@ CUDT::CUDT()
    m_bReuseAddr = true;
    m_llMaxBW = -1;
 
-   m_pCCFactory = new CCCFactory<CUDTCC>;
+   m_pCCFactory = createDefaultCCFactory();
    m_pCC = NULL;
    m_pCache = NULL;
 
