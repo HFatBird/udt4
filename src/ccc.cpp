@@ -325,6 +325,9 @@ m_dBtlBw(),
 m_iMinRTT(),
 m_iFullBwCount(),
 m_iCycleIndex(),
+m_iLossEvents(),
+m_iAckEvents(),
+m_dLossEWMA(),
 m_bFilledPipe(),
 m_bProbeRTTDone()
 {
@@ -341,12 +344,33 @@ void CBBRCC::init()
    m_iMinRTT = 0;
    m_iFullBwCount = 0;
    m_iCycleIndex = 0;
+   m_iLossEvents = 0;
+   m_iAckEvents = 0;
+   m_dLossEWMA = 0.0;
    m_bFilledPipe = false;
    m_bProbeRTTDone = false;
 
    setACKTimer(m_iSYNInterval);
    m_dCWndSize = 16;
    m_dPktSndPeriod = 1;
+}
+
+double CBBRCC::getMinCWnd() const
+{
+   // Keep a smaller floor for narrowband/high-delay links to avoid persistent queueing.
+   if ((m_iBandwidth > 0) && (m_iBandwidth <= 256))
+      return 4.0;
+
+   if ((m_dBtlBw > 0) && (m_iMinRTT > 0))
+   {
+      const double bdp = (m_dBtlBw * m_iMinRTT) / 1000000.0;
+      if (bdp < 12.0)
+         return 4.0;
+      if (bdp < 20.0)
+         return 8.0;
+   }
+
+   return 16.0;
 }
 
 void CBBRCC::enterMode(BBRMode mode)
@@ -391,6 +415,7 @@ void CBBRCC::onACK(int32_t)
       return;
 
    m_LastUpdateTime = now;
+   ++ m_iAckEvents;
    updateModel();
 
    if ((0 != m_iMinRTT) && (now - m_MinRTTStamp > 10000000ULL) && (BBR_PROBE_RTT != m_BBRMode))
@@ -411,16 +436,32 @@ void CBBRCC::onACK(int32_t)
          m_dCWndSize -= 8;
    }
 
+   // EWMA loss sampling, used for narrowband links where random loss is significant.
+   if (m_iAckEvents > 0)
+   {
+      const double sample = double(m_iLossEvents) / double(m_iAckEvents);
+      m_dLossEWMA = m_dLossEWMA * 0.875 + sample * 0.125;
+      m_iAckEvents = 0;
+      m_iLossEvents = 0;
+   }
+
+   const bool narrowband = ((m_iBandwidth > 0) && (m_iBandwidth <= 256)) ||
+                           ((m_dBtlBw > 0) && (m_dBtlBw < 384.0));
+   const double min_cwnd = getMinCWnd();
+
    double pacing_gain = 1.0;
    double cwnd_gain = 2.0;
 
    if (BBR_STARTUP == m_BBRMode)
-      pacing_gain = 2.0;
+   {
+      pacing_gain = narrowband ? 1.5 : 2.0;
+      cwnd_gain = narrowband ? 1.6 : 2.0;
+   }
    else if (BBR_DRAIN == m_BBRMode)
-      pacing_gain = 0.75;
+      pacing_gain = narrowband ? 0.85 : 0.75;
    else if (BBR_PROBE_BW == m_BBRMode)
    {
-      static const double g_cycle[] = {1.25, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+      static const double g_cycle[] = {1.15, 0.85, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
       pacing_gain = g_cycle[m_iCycleIndex];
       if (now - m_LastRoundStart >= 1000000ULL)
       {
@@ -446,6 +487,14 @@ void CBBRCC::onACK(int32_t)
       }
    }
 
+   // Persistent random loss usually means queue pressure on narrow paths; shrink probing amplitude.
+   if (m_dLossEWMA > 0.05)
+   {
+      pacing_gain = 0.95 + (pacing_gain - 1.0) * 0.5;
+      if (cwnd_gain > 1.3)
+         cwnd_gain = 1.3;
+   }
+
    if (m_dBtlBw > 0)
       m_dPktSndPeriod = 1000000.0 / (m_dBtlBw * pacing_gain);
    else if (m_iRcvRate > 0)
@@ -461,32 +510,38 @@ void CBBRCC::onACK(int32_t)
       bdp = (m_iBandwidth * m_iRTT) / 1000000.0;
 
    m_dCWndSize = bdp * cwnd_gain;
-   if (m_dCWndSize < 16.0)
-      m_dCWndSize = 16.0;
+   if (m_dCWndSize < min_cwnd)
+      m_dCWndSize = min_cwnd;
    if (m_dCWndSize > m_dMaxCWndSize)
       m_dCWndSize = m_dMaxCWndSize;
 }
 
 void CBBRCC::onLoss(const int32_t*, int)
 {
+   ++ m_iLossEvents;
+
+   const double min_cwnd = getMinCWnd();
+
    if (m_dPktSndPeriod < 1000000.0)
-      m_dPktSndPeriod *= 1.1;
+      m_dPktSndPeriod *= (m_dLossEWMA > 0.05) ? 1.2 : 1.1;
 
-   if (m_dCWndSize > 16.0)
-      m_dCWndSize *= 0.9;
+   if (m_dCWndSize > min_cwnd)
+      m_dCWndSize *= (m_dLossEWMA > 0.05) ? 0.8 : 0.9;
 
-   if (m_dCWndSize < 16.0)
-      m_dCWndSize = 16.0;
+   if (m_dCWndSize < min_cwnd)
+      m_dCWndSize = min_cwnd;
 }
 
 void CBBRCC::onTimeout()
 {
+   const double min_cwnd = getMinCWnd();
+
    if (m_dPktSndPeriod < 1000000.0)
       m_dPktSndPeriod *= 1.25;
-   if (m_dCWndSize > 16.0)
+   if (m_dCWndSize > min_cwnd)
       m_dCWndSize *= 0.8;
-   if (m_dCWndSize < 16.0)
-      m_dCWndSize = 16.0;
+   if (m_dCWndSize < min_cwnd)
+      m_dCWndSize = min_cwnd;
 
    enterMode(BBR_PROBE_BW);
 }
