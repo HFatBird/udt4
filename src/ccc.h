@@ -298,6 +298,7 @@ private:
 private:
    void enterMode(BBRMode mode);
    void updateModel();
+   double getMinCWnd() const;
 
 private:
    BBRMode m_BBRMode;
@@ -309,6 +310,9 @@ private:
    int m_iMinRTT;
    int m_iFullBwCount;
    int m_iCycleIndex;
+   int m_iLossEvents;
+   int m_iAckEvents;
+   double m_dLossEWMA;
    bool m_bFilledPipe;
    bool m_bProbeRTTDone;
 };
