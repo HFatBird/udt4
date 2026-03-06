@@ -264,7 +264,10 @@ void CUDTCC::onLoss(const int32_t* losslist, int)
       // If no receiving rate is observed, we have to compute the sending
       // rate according to the current window size, and decrease it
       // using the method below.
-      m_dPktSndPeriod = m_dCWndSize / (m_iRTT + m_iRCInterval);
+      // Packet send period is in microseconds per packet. Keep the same unit
+      // conversion used in onACK(): one RTT worth of time divided by packets
+      // in flight, not the inverse.
+      m_dPktSndPeriod = (m_iRTT + m_iRCInterval) / m_dCWndSize;
    }
 
    m_bLoss = true;
@@ -302,7 +305,8 @@ void CUDTCC::onTimeout()
       if (m_iRcvRate > 0)
          m_dPktSndPeriod = 1000000.0 / m_iRcvRate;
       else
-         m_dPktSndPeriod = m_dCWndSize / (m_iRTT + m_iRCInterval);
+         // Packet send period is in microseconds per packet.
+         m_dPktSndPeriod = (m_iRTT + m_iRCInterval) / m_dCWndSize;
    }
    else
    {
