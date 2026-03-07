@@ -320,6 +320,7 @@ void CUDTCC::onTimeout()
 
 //
 CBBRCC::CBBRCC():
+m_BBRVariant(BBR_V1),
 m_BBRMode(BBR_STARTUP),
 m_LastUpdateTime(),
 m_LastRoundStart(),
@@ -334,6 +335,35 @@ m_iAckEvents(),
 m_dLossEWMA(),
 m_bFilledPipe(),
 m_bProbeRTTDone()
+{
+}
+
+CBBRCC::CBBRCC(BBRVariant variant):
+m_BBRVariant(variant),
+m_BBRMode(BBR_STARTUP),
+m_LastUpdateTime(),
+m_LastRoundStart(),
+m_MinRTTStamp(),
+m_ProbeRTTDoneStamp(),
+m_dBtlBw(),
+m_iMinRTT(),
+m_iFullBwCount(),
+m_iCycleIndex(),
+m_iLossEvents(),
+m_iAckEvents(),
+m_dLossEWMA(),
+m_bFilledPipe(),
+m_bProbeRTTDone()
+{
+}
+
+CBBRv2CC::CBBRv2CC():
+CBBRCC(BBR_V2)
+{
+}
+
+CBBRv3CC::CBBRv3CC():
+CBBRCC(BBR_V3)
 {
 }
 
@@ -412,6 +442,132 @@ void CBBRCC::updateModel()
    }
 }
 
+double CBBRCC::getStartupPacingGain(bool narrowband) const
+{
+   if (BBR_V2 == m_BBRVariant)
+      return narrowband ? 1.35 : 1.7;
+   if (BBR_V3 == m_BBRVariant)
+      return narrowband ? 1.25 : 1.55;
+
+   return narrowband ? 1.5 : 2.0;
+}
+
+double CBBRCC::getStartupCWndGain(bool narrowband) const
+{
+   if (BBR_V2 == m_BBRVariant)
+      return narrowband ? 1.45 : 1.8;
+   if (BBR_V3 == m_BBRVariant)
+      return narrowband ? 1.35 : 1.65;
+
+   return narrowband ? 1.6 : 2.0;
+}
+
+double CBBRCC::getDrainPacingGain(bool narrowband) const
+{
+   if (BBR_V2 == m_BBRVariant)
+      return narrowband ? 0.9 : 0.82;
+   if (BBR_V3 == m_BBRVariant)
+      return narrowband ? 0.93 : 0.86;
+
+   return narrowband ? 0.85 : 0.75;
+}
+
+double CBBRCC::getProbeRTTPacingGain() const
+{
+   if (BBR_V2 == m_BBRVariant)
+      return 0.7;
+   if (BBR_V3 == m_BBRVariant)
+      return 0.75;
+
+   return 0.6;
+}
+
+void CBBRCC::getProbeBwCycle(const double*& cycle, int& size) const
+{
+   static const double v1[] = {1.15, 0.85, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+   static const double v2[] = {1.08, 0.96, 1.03, 0.99, 1.0, 1.01, 0.99, 1.0};
+   static const double v3[] = {1.05, 0.98, 1.02, 0.99, 1.0, 1.0, 0.99, 1.0};
+
+   if (BBR_V2 == m_BBRVariant)
+      cycle = v2;
+   else if (BBR_V3 == m_BBRVariant)
+      cycle = v3;
+   else
+      cycle = v1;
+
+   size = 8;
+}
+
+double CBBRCC::getHighLossCWndCap() const
+{
+   if (BBR_V2 == m_BBRVariant)
+      return 1.2;
+   if (BBR_V3 == m_BBRVariant)
+      return 1.1;
+
+   return 1.3;
+}
+
+double CBBRCC::getLossPacingPenalty() const
+{
+   if (BBR_V2 == m_BBRVariant)
+      return 1.12;
+   if (BBR_V3 == m_BBRVariant)
+      return 1.08;
+
+   return 1.1;
+}
+
+double CBBRCC::getHighLossPacingPenalty() const
+{
+   if (BBR_V2 == m_BBRVariant)
+      return 1.16;
+   if (BBR_V3 == m_BBRVariant)
+      return 1.12;
+
+   return 1.2;
+}
+
+double CBBRCC::getLossCWndPenalty() const
+{
+   if (BBR_V2 == m_BBRVariant)
+      return 0.88;
+   if (BBR_V3 == m_BBRVariant)
+      return 0.92;
+
+   return 0.9;
+}
+
+double CBBRCC::getHighLossCWndPenalty() const
+{
+   if (BBR_V2 == m_BBRVariant)
+      return 0.84;
+   if (BBR_V3 == m_BBRVariant)
+      return 0.88;
+
+   return 0.8;
+}
+
+double CBBRCC::getTimeoutPacingPenalty() const
+{
+   if (BBR_V2 == m_BBRVariant)
+      return 1.2;
+   if (BBR_V3 == m_BBRVariant)
+      return 1.15;
+
+   return 1.25;
+}
+
+double CBBRCC::getTimeoutCWndPenalty() const
+{
+   if (BBR_V2 == m_BBRVariant)
+      return 0.85;
+   if (BBR_V3 == m_BBRVariant)
+      return 0.9;
+
+   return 0.8;
+}
+
 void CBBRCC::onACK(int32_t)
 {
    uint64_t now = CTimer::getTime();
@@ -458,24 +614,26 @@ void CBBRCC::onACK(int32_t)
 
    if (BBR_STARTUP == m_BBRMode)
    {
-      pacing_gain = narrowband ? 1.5 : 2.0;
-      cwnd_gain = narrowband ? 1.6 : 2.0;
+      pacing_gain = getStartupPacingGain(narrowband);
+      cwnd_gain = getStartupCWndGain(narrowband);
    }
    else if (BBR_DRAIN == m_BBRMode)
-      pacing_gain = narrowband ? 0.85 : 0.75;
+      pacing_gain = getDrainPacingGain(narrowband);
    else if (BBR_PROBE_BW == m_BBRMode)
    {
-      static const double g_cycle[] = {1.15, 0.85, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+      const double* g_cycle = NULL;
+      int cycle_size = 0;
+      getProbeBwCycle(g_cycle, cycle_size);
       pacing_gain = g_cycle[m_iCycleIndex];
       if (now - m_LastRoundStart >= 1000000ULL)
       {
-         m_iCycleIndex = (m_iCycleIndex + 1) % 8;
+         m_iCycleIndex = (m_iCycleIndex + 1) % cycle_size;
          m_LastRoundStart = now;
       }
    }
    else if (BBR_PROBE_RTT == m_BBRMode)
    {
-      pacing_gain = 0.6;
+      pacing_gain = getProbeRTTPacingGain();
       cwnd_gain = 1.0;
       if (!m_bProbeRTTDone)
       {
@@ -495,8 +653,9 @@ void CBBRCC::onACK(int32_t)
    if (m_dLossEWMA > 0.05)
    {
       pacing_gain = 0.95 + (pacing_gain - 1.0) * 0.5;
-      if (cwnd_gain > 1.3)
-         cwnd_gain = 1.3;
+      const double cap = getHighLossCWndCap();
+      if (cwnd_gain > cap)
+         cwnd_gain = cap;
    }
 
    if (m_dBtlBw > 0)
@@ -527,10 +686,10 @@ void CBBRCC::onLoss(const int32_t*, int)
    const double min_cwnd = getMinCWnd();
 
    if (m_dPktSndPeriod < 1000000.0)
-      m_dPktSndPeriod *= (m_dLossEWMA > 0.05) ? 1.2 : 1.1;
+      m_dPktSndPeriod *= (m_dLossEWMA > 0.05) ? getHighLossPacingPenalty() : getLossPacingPenalty();
 
    if (m_dCWndSize > min_cwnd)
-      m_dCWndSize *= (m_dLossEWMA > 0.05) ? 0.8 : 0.9;
+      m_dCWndSize *= (m_dLossEWMA > 0.05) ? getHighLossCWndPenalty() : getLossCWndPenalty();
 
    if (m_dCWndSize < min_cwnd)
       m_dCWndSize = min_cwnd;
@@ -541,9 +700,9 @@ void CBBRCC::onTimeout()
    const double min_cwnd = getMinCWnd();
 
    if (m_dPktSndPeriod < 1000000.0)
-      m_dPktSndPeriod *= 1.25;
+      m_dPktSndPeriod *= getTimeoutPacingPenalty();
    if (m_dCWndSize > min_cwnd)
-      m_dCWndSize *= 0.8;
+      m_dCWndSize *= getTimeoutCWndPenalty();
    if (m_dCWndSize < min_cwnd)
       m_dCWndSize = min_cwnd;
 
@@ -555,8 +714,17 @@ CCCVirtualFactory* createDefaultCCFactory()
    const char* cc_algo = getenv("UDT_CC_ALGO");
    if (NULL != cc_algo)
    {
-      if ((0 == strcmp(cc_algo, "bbr")) || (0 == strcmp(cc_algo, "BBR")))
+      if ((0 == strcmp(cc_algo, "bbr")) || (0 == strcmp(cc_algo, "BBR")) ||
+          (0 == strcmp(cc_algo, "bbr1")) || (0 == strcmp(cc_algo, "BBR1")))
          return new CCCFactory<CBBRCC>;
+
+      if ((0 == strcmp(cc_algo, "bbr2")) || (0 == strcmp(cc_algo, "BBR2")) ||
+          (0 == strcmp(cc_algo, "bbrv2")) || (0 == strcmp(cc_algo, "BBRV2")))
+         return new CCCFactory<CBBRv2CC>;
+
+      if ((0 == strcmp(cc_algo, "bbr3")) || (0 == strcmp(cc_algo, "BBR3")) ||
+          (0 == strcmp(cc_algo, "bbrv3")) || (0 == strcmp(cc_algo, "BBRV3")))
+         return new CCCFactory<CBBRv3CC>;
    }
 
    return new CCCFactory<CUDTCC>;

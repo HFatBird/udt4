@@ -45,6 +45,8 @@ https://sourceforge.net/projects/udt/forums
 
 Congestion control selection:
 By default UDT keeps using the original built-in congestion control (CUDTCC).
-Set environment variable UDT_CC_ALGO=bbr before creating UDT sockets to switch to
-the new BBR-style controller (CBBRCC).
+Set environment variable UDT_CC_ALGO before creating UDT sockets to switch controllers:
+  - bbr / bbr1: baseline BBR-style controller (CBBRCC)
+  - bbr2: BBRv2-style controller with gentler gain cycling and stronger loss response
+  - bbr3: BBRv3-style controller with low-queue probing and smoother recovery
 

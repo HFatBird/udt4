@@ -286,7 +286,14 @@ public:
    virtual void onLoss(const int32_t*, int);
    virtual void onTimeout();
 
-private:
+protected:
+   enum BBRVariant
+   {
+      BBR_V1 = 1,
+      BBR_V2 = 2,
+      BBR_V3 = 3
+   };
+
    enum BBRMode
    {
       BBR_STARTUP = 0,
@@ -295,10 +302,30 @@ private:
       BBR_PROBE_RTT = 3
    };
 
+protected:
+   CBBRCC(BBRVariant variant);
+
+protected:
+   BBRVariant m_BBRVariant;
+
 private:
    void enterMode(BBRMode mode);
    void updateModel();
    double getMinCWnd() const;
+
+   double getStartupPacingGain(bool narrowband) const;
+   double getStartupCWndGain(bool narrowband) const;
+   double getDrainPacingGain(bool narrowband) const;
+   double getProbeRTTPacingGain() const;
+   void getProbeBwCycle(const double*& cycle, int& size) const;
+
+   double getHighLossCWndCap() const;
+   double getLossPacingPenalty() const;
+   double getHighLossPacingPenalty() const;
+   double getLossCWndPenalty() const;
+   double getHighLossCWndPenalty() const;
+   double getTimeoutPacingPenalty() const;
+   double getTimeoutCWndPenalty() const;
 
 private:
    BBRMode m_BBRMode;
@@ -315,6 +342,18 @@ private:
    double m_dLossEWMA;
    bool m_bFilledPipe;
    bool m_bProbeRTTDone;
+};
+
+class CBBRv2CC: public CBBRCC
+{
+public:
+   CBBRv2CC();
+};
+
+class CBBRv3CC: public CBBRCC
+{
+public:
+   CBBRv3CC();
 };
 
 CCCVirtualFactory* createDefaultCCFactory();
