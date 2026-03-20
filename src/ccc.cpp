@@ -319,8 +319,8 @@ void CUDTCC::onTimeout()
 }
 
 //
-CBBRCC::CBBRCC():
-m_BBRMode(BBR_STARTUP),
+CBBRv2CC::CBBRv2CC():
+m_BBRMode(BBRV2_STARTUP),
 m_LastUpdateTime(),
 m_LastRoundStart(),
 m_MinRTTStamp(),
@@ -337,9 +337,9 @@ m_bProbeRTTDone()
 {
 }
 
-void CBBRCC::init()
+void CBBRv2CC::init()
 {
-   m_BBRMode = BBR_STARTUP;
+   m_BBRMode = BBRV2_STARTUP;
    m_LastUpdateTime = CTimer::getTime();
    m_LastRoundStart = m_LastUpdateTime;
    m_MinRTTStamp = m_LastUpdateTime;
@@ -359,7 +359,7 @@ void CBBRCC::init()
    m_dPktSndPeriod = 1;
 }
 
-double CBBRCC::getMinCWnd() const
+double CBBRv2CC::getMinCWnd() const
 {
    // Keep a smaller floor for narrowband/high-delay links to avoid persistent queueing.
    if ((m_iBandwidth > 0) && (m_iBandwidth <= 256))
@@ -377,27 +377,27 @@ double CBBRCC::getMinCWnd() const
    return 16.0;
 }
 
-void CBBRCC::enterMode(BBRMode mode)
+void CBBRv2CC::enterMode(BBRv2Mode mode)
 {
    m_BBRMode = mode;
-   if (BBR_PROBE_BW == mode)
+   if (BBRV2_PROBE_BW == mode)
       m_iCycleIndex = 0;
 }
 
-void CBBRCC::updateModel()
+void CBBRv2CC::updateModel()
 {
    if (m_iBandwidth > 0)
    {
       if (m_iBandwidth > m_dBtlBw)
       {
          m_dBtlBw = m_iBandwidth;
-         if (BBR_STARTUP == m_BBRMode)
+         if (BBRV2_STARTUP == m_BBRMode)
          {
             m_iFullBwCount = 0;
             m_bFilledPipe = false;
          }
       }
-      else if (BBR_STARTUP == m_BBRMode)
+      else if (BBRV2_STARTUP == m_BBRMode)
       {
          ++ m_iFullBwCount;
          if (m_iFullBwCount >= 3)
@@ -412,7 +412,7 @@ void CBBRCC::updateModel()
    }
 }
 
-void CBBRCC::onACK(int32_t)
+void CBBRv2CC::onACK(int32_t)
 {
    uint64_t now = CTimer::getTime();
    if (now - m_LastUpdateTime < (uint64_t)m_iSYNInterval)
@@ -422,20 +422,20 @@ void CBBRCC::onACK(int32_t)
    ++ m_iAckEvents;
    updateModel();
 
-   if ((0 != m_iMinRTT) && (now - m_MinRTTStamp > 10000000ULL) && (BBR_PROBE_RTT != m_BBRMode))
+   if ((0 != m_iMinRTT) && (now - m_MinRTTStamp > 10000000ULL) && (BBRV2_PROBE_RTT != m_BBRMode))
    {
-      enterMode(BBR_PROBE_RTT);
+      enterMode(BBRV2_PROBE_RTT);
       m_bProbeRTTDone = false;
       m_ProbeRTTDoneStamp = 0;
    }
 
-   if ((BBR_STARTUP == m_BBRMode) && m_bFilledPipe)
-      enterMode(BBR_DRAIN);
+   if ((BBRV2_STARTUP == m_BBRMode) && m_bFilledPipe)
+      enterMode(BBRV2_DRAIN);
 
-   if (BBR_DRAIN == m_BBRMode)
+   if (BBRV2_DRAIN == m_BBRMode)
    {
       if (m_dCWndSize <= 64)
-         enterMode(BBR_PROBE_BW);
+         enterMode(BBRV2_PROBE_BW);
       else
          m_dCWndSize -= 8;
    }
@@ -456,14 +456,14 @@ void CBBRCC::onACK(int32_t)
    double pacing_gain = 1.0;
    double cwnd_gain = 2.0;
 
-   if (BBR_STARTUP == m_BBRMode)
+   if (BBRV2_STARTUP == m_BBRMode)
    {
       pacing_gain = narrowband ? 1.5 : 2.0;
       cwnd_gain = narrowband ? 1.6 : 2.0;
    }
-   else if (BBR_DRAIN == m_BBRMode)
+   else if (BBRV2_DRAIN == m_BBRMode)
       pacing_gain = narrowband ? 0.85 : 0.75;
-   else if (BBR_PROBE_BW == m_BBRMode)
+   else if (BBRV2_PROBE_BW == m_BBRMode)
    {
       static const double g_cycle[] = {1.15, 0.85, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
       pacing_gain = g_cycle[m_iCycleIndex];
@@ -473,7 +473,7 @@ void CBBRCC::onACK(int32_t)
          m_LastRoundStart = now;
       }
    }
-   else if (BBR_PROBE_RTT == m_BBRMode)
+   else if (BBRV2_PROBE_RTT == m_BBRMode)
    {
       pacing_gain = 0.6;
       cwnd_gain = 1.0;
@@ -487,7 +487,7 @@ void CBBRCC::onACK(int32_t)
       else
       {
          m_MinRTTStamp = now;
-         enterMode(BBR_PROBE_BW);
+         enterMode(BBRV2_PROBE_BW);
       }
    }
 
@@ -520,7 +520,7 @@ void CBBRCC::onACK(int32_t)
       m_dCWndSize = m_dMaxCWndSize;
 }
 
-void CBBRCC::onLoss(const int32_t*, int)
+void CBBRv2CC::onLoss(const int32_t*, int)
 {
    ++ m_iLossEvents;
 
@@ -536,7 +536,7 @@ void CBBRCC::onLoss(const int32_t*, int)
       m_dCWndSize = min_cwnd;
 }
 
-void CBBRCC::onTimeout()
+void CBBRv2CC::onTimeout()
 {
    const double min_cwnd = getMinCWnd();
 
@@ -547,7 +547,7 @@ void CBBRCC::onTimeout()
    if (m_dCWndSize < min_cwnd)
       m_dCWndSize = min_cwnd;
 
-   enterMode(BBR_PROBE_BW);
+   enterMode(BBRV2_PROBE_BW);
 }
 
 CCCVirtualFactory* createDefaultCCFactory()
@@ -555,8 +555,8 @@ CCCVirtualFactory* createDefaultCCFactory()
    const char* cc_algo = getenv("UDT_CC_ALGO");
    if (NULL != cc_algo)
    {
-      if ((0 == strcmp(cc_algo, "bbr")) || (0 == strcmp(cc_algo, "BBR")))
-         return new CCCFactory<CBBRCC>;
+      if ((0 == strcmp(cc_algo, "bbrv2")) || (0 == strcmp(cc_algo, "BBRV2")))
+         return new CCCFactory<CBBRv2CC>;
    }
 
    return new CCCFactory<CUDTCC>;

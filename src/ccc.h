@@ -275,10 +275,10 @@ private:
    int m_iDecCount;			// number of decreases in a congestion epoch
 };
 
-class CBBRCC: public CCC
+class CBBRv2CC: public CCC
 {
 public:
-   CBBRCC();
+   CBBRv2CC();
 
 public:
    virtual void init();
@@ -287,21 +287,21 @@ public:
    virtual void onTimeout();
 
 private:
-   enum BBRMode
+   enum BBRv2Mode
    {
-      BBR_STARTUP = 0,
-      BBR_DRAIN = 1,
-      BBR_PROBE_BW = 2,
-      BBR_PROBE_RTT = 3
+      BBRV2_STARTUP = 0,
+      BBRV2_DRAIN = 1,
+      BBRV2_PROBE_BW = 2,
+      BBRV2_PROBE_RTT = 3
    };
 
 private:
-   void enterMode(BBRMode mode);
+   void enterMode(BBRv2Mode mode);
    void updateModel();
    double getMinCWnd() const;
 
 private:
-   BBRMode m_BBRMode;
+   BBRv2Mode m_BBRMode;
    uint64_t m_LastUpdateTime;
    uint64_t m_LastRoundStart;
    uint64_t m_MinRTTStamp;
