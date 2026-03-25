@@ -66,6 +66,12 @@ written by
    #define NET_ERROR WSAGetLastError()
 #endif
 
+#ifdef UDT_COMPACT_NO_TIMESTAMP
+   static const int UDT_WIRE_HEADER_SIZE = 12;
+#else
+   static const int UDT_WIRE_HEADER_SIZE = CPacket::m_iPktHdrSize;
+#endif
+
 
 CChannel::CChannel():
 m_iIPversion(AF_INET),
@@ -232,44 +238,73 @@ int CChannel::sendto(const sockaddr* addr, CPacket& packet) const
    if (packet.getFlag())
       for (int i = 0, n = packet.getLength() / 4; i < n; ++ i)
          *((uint32_t *)packet.m_pcData + i) = htonl(*((uint32_t *)packet.m_pcData + i));
-
-   // convert packet header into network order
-   //for (int j = 0; j < 4; ++ j)
-   //   packet.m_nHeader[j] = htonl(packet.m_nHeader[j]);
-   uint32_t* p = packet.m_nHeader;
-   for (int j = 0; j < 4; ++ j)
-   {
-      *p = htonl(*p);
-      ++ p;
-   }
+   int res = -1;
 
    #ifndef WIN32
       msghdr mh;
       mh.msg_name = (sockaddr*)addr;
       mh.msg_namelen = m_iSockAddrSize;
-      mh.msg_iov = (iovec*)packet.m_PacketVector;
       mh.msg_iovlen = 2;
       mh.msg_control = NULL;
       mh.msg_controllen = 0;
       mh.msg_flags = 0;
-
-      int res = ::sendmsg(m_iSocket, &mh, 0);
+      #ifdef UDT_COMPACT_NO_TIMESTAMP
+         uint32_t header[3];
+         header[0] = htonl(packet.m_nHeader[0]);
+         header[1] = htonl(packet.m_nHeader[1]);
+         header[2] = htonl(packet.m_nHeader[3]);
+         iovec iov[2];
+         iov[0].iov_base = (char*)header;
+         iov[0].iov_len = UDT_WIRE_HEADER_SIZE;
+         iov[1] = packet.m_PacketVector[1];
+         mh.msg_iov = iov;
+      #else
+         uint32_t* p = packet.m_nHeader;
+         for (int j = 0; j < 4; ++ j)
+         {
+            *p = htonl(*p);
+            ++ p;
+         }
+         mh.msg_iov = (iovec*)packet.m_PacketVector;
+      #endif
+      res = ::sendmsg(m_iSocket, &mh, 0);
    #else
-      DWORD size = CPacket::m_iPktHdrSize + packet.getLength();
-      int addrsize = m_iSockAddrSize;
-      int res = ::WSASendTo(m_iSocket, (LPWSABUF)packet.m_PacketVector, 2, &size, 0, addr, addrsize, NULL, NULL);
+      DWORD size = 0;
+      #ifdef UDT_COMPACT_NO_TIMESTAMP
+         uint32_t header[3];
+         header[0] = htonl(packet.m_nHeader[0]);
+         header[1] = htonl(packet.m_nHeader[1]);
+         header[2] = htonl(packet.m_nHeader[3]);
+         WSABUF iov[2];
+         iov[0].buf = (char*)header;
+         iov[0].len = UDT_WIRE_HEADER_SIZE;
+         iov[1].buf = packet.m_PacketVector[1].iov_base;
+         iov[1].len = packet.m_PacketVector[1].iov_len;
+         size = UDT_WIRE_HEADER_SIZE + packet.getLength();
+         int addrsize = m_iSockAddrSize;
+         res = ::WSASendTo(m_iSocket, iov, 2, &size, 0, addr, addrsize, NULL, NULL);
+      #else
+         uint32_t* p = packet.m_nHeader;
+         for (int j = 0; j < 4; ++ j)
+         {
+            *p = htonl(*p);
+            ++ p;
+         }
+         size = CPacket::m_iPktHdrSize + packet.getLength();
+         int addrsize = m_iSockAddrSize;
+         res = ::WSASendTo(m_iSocket, (LPWSABUF)packet.m_PacketVector, 2, &size, 0, addr, addrsize, NULL, NULL);
+      #endif
       res = (0 == res) ? size : -1;
    #endif
 
-   // convert back into local host order
-   //for (int k = 0; k < 4; ++ k)
-   //   packet.m_nHeader[k] = ntohl(packet.m_nHeader[k]);
-   p = packet.m_nHeader;
-   for (int k = 0; k < 4; ++ k)
-   {
-      *p = ntohl(*p);
-       ++ p;
-   }
+   #ifndef UDT_COMPACT_NO_TIMESTAMP
+      uint32_t* p2 = packet.m_nHeader;
+      for (int k = 0; k < 4; ++ k)
+      {
+         *p2 = ntohl(*p2);
+         ++ p2;
+      }
+   #endif
 
    if (packet.getFlag())
    {
@@ -282,15 +317,25 @@ int CChannel::sendto(const sockaddr* addr, CPacket& packet) const
 
 int CChannel::recvfrom(sockaddr* addr, CPacket& packet) const
 {
+   int res = -1;
    #ifndef WIN32
       msghdr mh;   
       mh.msg_name = addr;
       mh.msg_namelen = m_iSockAddrSize;
-      mh.msg_iov = packet.m_PacketVector;
       mh.msg_iovlen = 2;
       mh.msg_control = NULL;
       mh.msg_controllen = 0;
       mh.msg_flags = 0;
+      #ifdef UDT_COMPACT_NO_TIMESTAMP
+         uint32_t header[3];
+         iovec iov[2];
+         iov[0].iov_base = (char*)header;
+         iov[0].iov_len = UDT_WIRE_HEADER_SIZE;
+         iov[1] = packet.m_PacketVector[1];
+         mh.msg_iov = iov;
+      #else
+         mh.msg_iov = packet.m_PacketVector;
+      #endif
 
       #ifdef UNIX
          fd_set set;
@@ -302,13 +347,27 @@ int CChannel::recvfrom(sockaddr* addr, CPacket& packet) const
          ::select(m_iSocket+1, &set, NULL, &set, &tv);
       #endif
 
-      int res = ::recvmsg(m_iSocket, &mh, 0);
+      res = ::recvmsg(m_iSocket, &mh, 0);
    #else
-      DWORD size = CPacket::m_iPktHdrSize + packet.getLength();
+      DWORD size = 0;
+      #ifdef UDT_COMPACT_NO_TIMESTAMP
+         uint32_t header[3];
+         WSABUF iov[2];
+         iov[0].buf = (char*)header;
+         iov[0].len = UDT_WIRE_HEADER_SIZE;
+         iov[1].buf = packet.m_PacketVector[1].iov_base;
+         iov[1].len = packet.m_PacketVector[1].iov_len;
+         size = UDT_WIRE_HEADER_SIZE + packet.getLength();
+      #else
+         size = CPacket::m_iPktHdrSize + packet.getLength();
+      #endif
       DWORD flag = 0;
       int addrsize = m_iSockAddrSize;
-
-      int res = ::WSARecvFrom(m_iSocket, (LPWSABUF)packet.m_PacketVector, 2, &size, &flag, addr, &addrsize, NULL, NULL);
+      #ifdef UDT_COMPACT_NO_TIMESTAMP
+         res = ::WSARecvFrom(m_iSocket, iov, 2, &size, &flag, addr, &addrsize, NULL, NULL);
+      #else
+         res = ::WSARecvFrom(m_iSocket, (LPWSABUF)packet.m_PacketVector, 2, &size, &flag, addr, &addrsize, NULL, NULL);
+      #endif
       res = (0 == res) ? size : -1;
    #endif
 
@@ -318,17 +377,27 @@ int CChannel::recvfrom(sockaddr* addr, CPacket& packet) const
       return -1;
    }
 
-   packet.setLength(res - CPacket::m_iPktHdrSize);
+   packet.setLength(res - UDT_WIRE_HEADER_SIZE);
 
-   // convert back into local host order
-   //for (int i = 0; i < 4; ++ i)
-   //   packet.m_nHeader[i] = ntohl(packet.m_nHeader[i]);
-   uint32_t* p = packet.m_nHeader;
-   for (int i = 0; i < 4; ++ i)
-   {
-      *p = ntohl(*p);
-      ++ p;
-   }
+   #ifdef UDT_COMPACT_NO_TIMESTAMP
+      #ifndef WIN32
+         packet.m_nHeader[0] = ntohl(header[0]);
+         packet.m_nHeader[1] = ntohl(header[1]);
+         packet.m_nHeader[3] = ntohl(header[2]);
+      #else
+         packet.m_nHeader[0] = ntohl(header[0]);
+         packet.m_nHeader[1] = ntohl(header[1]);
+         packet.m_nHeader[3] = ntohl(header[2]);
+      #endif
+      packet.m_nHeader[2] = 0;
+   #else
+      uint32_t* p = packet.m_nHeader;
+      for (int i = 0; i < 4; ++ i)
+      {
+         *p = ntohl(*p);
+         ++ p;
+      }
+   #endif
 
    if (packet.getFlag())
    {

@@ -11,6 +11,14 @@ ifndef arch
 endif
 
 CCFLAGS = -g -fPIC -Wall -Wextra -D$(os) #-finline-functions -O3 -fno-strict-aliasing #-msse3
+# Narrowband optimization (optional):
+# add -DUDT_COMPACT_NO_TIMESTAMP to reduce on-wire fixed header from
+# 16 bytes to 12 bytes by omitting the timestamp field.
+# add -DUDT_COMPACT_CTRL_HEADER to remove the 4-byte dummy payload
+# on empty control packets (e.g. keepalive/ack2/shutdown).
+# add -DUDT_COMPACT_HANDSHAKE to remove peer IP (16 bytes) from handshake.
+# NOTE: compact flags require both peers compiled with the same options.
+# CCFLAGS += -DUDT_COMPACT_CTRL_HEADER
 
 ifeq ($(arch), IA32)
    CCFLAGS += -DIA32

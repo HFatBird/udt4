@@ -148,7 +148,28 @@ written by
 
 
 const int CPacket::m_iPktHdrSize = 16;
+#ifdef UDT_COMPACT_HANDSHAKE
+const int CHandShake::m_iContentSize = 32;
+#else
 const int CHandShake::m_iContentSize = 48;
+#endif
+
+namespace
+{
+   inline void setEmptyControlPayload(iovec& payload, int32_t& pad)
+   {
+#ifdef UDT_COMPACT_CTRL_HEADER
+      (void)pad;
+      payload.iov_base = NULL;
+      payload.iov_len = 0;
+#else
+      // Keep backward-compatible behavior by default.
+      // Some very old stacks expected a non-empty iovec entry.
+      payload.iov_base = (char *)&pad;
+      payload.iov_len = 4;
+#endif
+   }
+}
 
 
 // Set up the aliases in the constructure
@@ -207,9 +228,7 @@ void CPacket::pack(int pkttype, void* lparam, void* rparam, int size)
       m_nHeader[1] = *(int32_t *)lparam;
 
       // control info field should be none
-      // but "writev" does not allow this
-      m_PacketVector[1].iov_base = (char *)&__pad; //NULL;
-      m_PacketVector[1].iov_len = 4; //0;
+      setEmptyControlPayload(m_PacketVector[1], __pad);
 
       break;
 
@@ -222,17 +241,13 @@ void CPacket::pack(int pkttype, void* lparam, void* rparam, int size)
 
    case 4: //0100 - Congestion Warning
       // control info field should be none
-      // but "writev" does not allow this
-      m_PacketVector[1].iov_base = (char *)&__pad; //NULL;
-      m_PacketVector[1].iov_len = 4; //0;
+      setEmptyControlPayload(m_PacketVector[1], __pad);
   
       break;
 
    case 1: //0001 - Keep-alive
       // control info field should be none
-      // but "writev" does not allow this
-      m_PacketVector[1].iov_base = (char *)&__pad; //NULL;
-      m_PacketVector[1].iov_len = 4; //0;
+      setEmptyControlPayload(m_PacketVector[1], __pad);
 
       break;
 
@@ -245,9 +260,7 @@ void CPacket::pack(int pkttype, void* lparam, void* rparam, int size)
 
    case 5: //0101 - Shutdown
       // control info field should be none
-      // but "writev" does not allow this
-      m_PacketVector[1].iov_base = (char *)&__pad; //NULL;
-      m_PacketVector[1].iov_len = 4; //0;
+      setEmptyControlPayload(m_PacketVector[1], __pad);
 
       break;
 
@@ -266,9 +279,7 @@ void CPacket::pack(int pkttype, void* lparam, void* rparam, int size)
       m_nHeader[1] = *(int32_t *)lparam;
 
       // control info field should be none
-      // but "writev" does not allow this
-      m_PacketVector[1].iov_base = (char *)&__pad; //NULL;
-      m_PacketVector[1].iov_len = 4; //0;
+      setEmptyControlPayload(m_PacketVector[1], __pad);
 
       break;
 
@@ -285,8 +296,7 @@ void CPacket::pack(int pkttype, void* lparam, void* rparam, int size)
       }
       else
       {
-         m_PacketVector[1].iov_base = (char *)&__pad;
-         m_PacketVector[1].iov_len = 4;
+         setEmptyControlPayload(m_PacketVector[1], __pad);
       }
 
       break;
@@ -382,8 +392,10 @@ int CHandShake::serialize(char* buf, int& size)
    *p++ = m_iReqType;
    *p++ = m_iID;
    *p++ = m_iCookie;
+#ifndef UDT_COMPACT_HANDSHAKE
    for (int i = 0; i < 4; ++ i)
       *p++ = m_piPeerIP[i];
+#endif
 
    size = m_iContentSize;
 
@@ -404,8 +416,13 @@ int CHandShake::deserialize(const char* buf, int size)
    m_iReqType = *p++;
    m_iID = *p++;
    m_iCookie = *p++;
+#ifndef UDT_COMPACT_HANDSHAKE
    for (int i = 0; i < 4; ++ i)
       m_piPeerIP[i] = *p++;
+#else
+   for (int i = 0; i < 4; ++ i)
+      m_piPeerIP[i] = 0;
+#endif
 
    return 0;
 }
